@@ -1,196 +1,211 @@
-require('dotenv').config()
+require('dotenv').config();
+const TelegramApi = require('node-telegram-bot-api');
+const fs = require('fs');
+const path = require('path');
 
-const TelegramApi = require('node-telegram-bot-api')
-const fs = require('fs')
-const path = require('path')
+const messages = require('./messages');
+const options = require('./options');
 
-const { gameOptions, againOptions, mainMenu, backToMenu } = require('./options')
-const messages = require('./messages')
+const token = process.env.TOKEN;
+const ADMIN_ID = process.env.ADMIN_ID;
 
-const token = process.env.TOKEN
-const ADMIN_ID = process.env.ADMIN_ID
+if (!token) {
+    console.error('❌ TOKEN не найден в .env');
+    process.exit(1);
+}
 
-const bot = new TelegramApi(token, { polling: true })
+const bot = new TelegramApi(token, { polling: true });
 
-const dataPath = path.join(__dirname, 'animeData.json')
+// ------------------ DATA ------------------
+const dataPath = path.join(__dirname, 'animeData.json');
+const statsPath = path.join(__dirname, 'stats.json');
 
 const loadData = () => {
-    if (!fs.existsSync(dataPath)) {
-        fs.writeFileSync(dataPath, '{}')
+    if (!fs.existsSync(dataPath)) fs.writeFileSync(dataPath, '{}');
+    return JSON.parse(fs.readFileSync(dataPath));
+};
+const saveData = (data) => fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
+let animeData = loadData();
+
+const loadStats = () => {
+    if (!fs.existsSync(statsPath)) fs.writeFileSync(statsPath, '{}');
+    return JSON.parse(fs.readFileSync(statsPath));
+};
+const saveStats = (data) => fs.writeFileSync(statsPath, JSON.stringify(data, null, 2));
+let userStats = loadStats();
+
+const userState = {};
+const gameData = {};
+
+// ------------------ HELPERS ------------------
+const sendScreen = async (chatId, messageId, text, keyboard) => {
+    try {
+        return await bot.editMessageText(text, {
+            chat_id: chatId,
+            message_id: messageId,
+            parse_mode: 'HTML',
+            reply_markup: keyboard
+        });
+    } catch {
+        return bot.sendMessage(chatId, text, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard
+        });
     }
-    return JSON.parse(fs.readFileSync(dataPath, 'utf-8'))
-}
+};
 
-const saveData = (data) => {
-    fs.writeFileSync(dataPath, JSON.stringify(data, null, 2))
-}
-
-let animeData = loadData()
+const updateStats = (chatId, result) => {
+    if (!userStats[chatId]) userStats[chatId] = { wins: 0, losses: 0 };
+    if (result === 'win') userStats[chatId].wins += 1;
+    if (result === 'loss') userStats[chatId].losses += 1;
+    saveStats(userStats);
+};
 
 const searchAnime = async (chatId, code) => {
-    const upperCode = code.toUpperCase()
-    const anime = animeData[upperCode]
+    if (typeof code !== 'string') return;
+
+    const upper = code.trim().toUpperCase();
+    const anime = animeData[upper];
 
     if (!anime) {
-        return bot.sendMessage(
-            chatId,
-            messages.notFound(upperCode),
-            backToMenu
-        )
+        return bot.sendMessage(chatId, messages.notFound(upper), {
+            parse_mode: 'HTML'
+        });
     }
 
     return bot.sendPhoto(chatId, anime.image, {
-        caption: messages.animeCaption(anime.title, upperCode),
+        caption: messages.animeCaption(anime.title, upper),
         parse_mode: 'HTML',
-        reply_markup: backToMenu.reply_markup
-    })
-}
+        reply_markup: options.animeScreen.reply_markup
+    });
+};
 
-const chats = {}
+const startGame = async (chatId, messageId) => {
+    const number = Math.floor(Math.random() * 10);
+    gameData[chatId] = number;
 
-const startGame = async (chatId) => {
-    await bot.sendMessage(chatId, messages.gameStart)
+    return sendScreen(
+        chatId,
+        messageId,
+        messages.gameStart,
+        options.gameOptions.reply_markup
+    );
+};
 
-    const randomNumber = Math.floor(Math.random() * 10)
-    chats[chatId] = randomNumber
+const addAnime = (chatId, text) => {
+    if (String(chatId) !== ADMIN_ID) return bot.sendMessage(chatId, messages.noAccess);
 
-    await bot.sendMessage(chatId, 'Выбирай число 👇', gameOptions)
-}
+    const parts = text.split(' ');
+    if (parts.length < 4) return bot.sendMessage(chatId, messages.addFormat);
 
+    const code = parts[1].toUpperCase();
+    const title = parts[2];
+    const image = parts[3];
+
+    animeData[code] = { title, image };
+    saveData(animeData);
+
+    bot.sendMessage(chatId, messages.addSuccess);
+};
+
+// ------------------ COMMANDS ------------------
 bot.setMyCommands([
     { command: 'start', description: 'Главное меню' },
-    { command: 'game', description: 'Игра угадай число' },
-    { command: 'info', description: "Инфорамция о боте" }
-])
+    { command: 'game', description: 'Игра' }
+]);
 
+bot.onText(/\/start/, async (msg) => {
+    const chatId = msg.chat.id;
+    await bot.sendMessage(chatId, messages.start, {
+        parse_mode: 'HTML',
+        ...options.mainMenu
+    });
+});
+
+// ------------------ MESSAGES ------------------
 bot.on('message', async (msg) => {
-    const text = msg.text
-    const chatId = msg.chat.id
+    const chatId = msg.chat.id;
+    const text = msg.text;
+    if (!text) return;
 
-    if (!text) return
+    if (text.startsWith('/add')) return addAnime(chatId, text);
 
-    if (text === '/start') {
-        return bot.sendMessage(chatId, messages.start, mainMenu)
+    if (userState[chatId] === 'search') {
+        delete userState[chatId];
+        return searchAnime(chatId, text);
     }
+});
 
-    if (text === '/game') {
-        return startGame(chatId)
-    }
-    if (text === '/info'){
-        return bot.sendMessage(chatId, messages.info)
-    }
-
-    if (text.startsWith('/add')) {
-        if (String(msg.from.id) !== ADMIN_ID) {
-            return bot.sendMessage(chatId, messages.noAccess)
-        }
-
-        const parts = text.split(' ')
-
-        if (parts.length < 4) {
-            return bot.sendMessage(chatId, messages.addFormat)
-        }
-
-        const code = parts[1].toUpperCase()
-        const title = parts[2]
-        const image = parts[3]
-
-        animeData[code] = { title, image }
-        saveData(animeData)
-
-        return bot.sendMessage(chatId, messages.addSuccess)
-    }
-
-    if (!text.startsWith('/')) {
-        return searchAnime(chatId, text)
-    }
-})
-
+// ------------------ CALLBACKS ------------------
 bot.on('callback_query', async (query) => {
-    const { id, data, message } = query
+    const chatId = query.message.chat.id;
+    const messageId = query.message.message_id;
+    const data = query.data;
 
-    try {
-        await bot.answerCallbackQuery(id)
-    } catch (e) {
-        return
+    await bot.answerCallbackQuery(query.id);
+
+    if (data === 'back') {
+        return sendScreen(
+            chatId,
+            messageId,
+            messages.start,
+            options.mainMenu.reply_markup
+        );
     }
 
-    if (!message) return
-
-    const chatId = message.chat.id
-    const messageId = message.message_id
-
-    if (data === 'back_menu') {
-        if (message.text) {
-            return bot.editMessageText(messages.start, {
-                chat_id: chatId,
-                message_id: messageId,
-                reply_markup: mainMenu.reply_markup
-            })
-        } else {
-            return bot.sendMessage(chatId, messages.start, mainMenu)
-        }
-    }
-
-    if (data === 'search') {
-        return bot.editMessageText(messages.askCode, {
-            chat_id: chatId,
-            message_id: messageId,
-            reply_markup: backToMenu.reply_markup
-        })
+    if (data === 'go_search') {
+        userState[chatId] = 'search';
+        return sendScreen(
+            chatId,
+            messageId,
+            '🔎 <b>Введите код аниме:</b>',
+            options.searchScreen.reply_markup
+        );
     }
 
     if (data === 'info') {
-        return bot.editMessageText(messages.info, {
-            chat_id: chatId,
-            message_id: messageId,
-            reply_markup: mainMenu.reply_markup
-        })
+        return sendScreen(
+            chatId,
+            messageId,
+            '🤖 <b>Информация о боте</b>\n\nПоиск аниме и игра.',
+            options.backToMenu.reply_markup
+        );
     }
 
-    if (data === 'game') {
-        const number = Math.floor(Math.random() * 10)
-        chats[chatId] = number
-
-        return bot.editMessageText(messages.gameStart, {
-            chat_id: chatId,
-            message_id: messageId,
-            reply_markup: gameOptions.reply_markup
-        })
-    }
-    if (data === 'again') {
-        const number = Math.floor(Math.random() * 10)
-        chats[chatId] = number
-
-        return bot.editMessageText(messages.gameStart, {
-            chat_id: chatId,
-            message_id: messageId,
-            reply_markup: gameOptions.reply_markup
-        })
+    if (data === 'stats') {
+        const stats = userStats[chatId] || { wins: 0, losses: 0 };
+        return sendScreen(
+            chatId,
+            messageId,
+            `📊 <b>Ваша статистика</b>\n\n🟢 Побед: ${stats.wins}\n🔴 Поражений: ${stats.losses}`,
+            options.backToMenu.reply_markup
+        );
     }
 
-    if (chats[chatId] !== undefined) {
-        const number = chats[chatId]
-        delete chats[chatId]
+    if (data === 'game') return startGame(chatId, messageId);
 
-        if (Number(data) === number) {
-            return bot.editMessageText(messages.gameWin(number), {
-                chat_id: chatId,
-                message_id: messageId,
-                reply_markup: againOptions.reply_markup
-            })
+    if (gameData[chatId] !== undefined && /^[0-9]$/.test(data)) {
+        const number = gameData[chatId];
+        delete gameData[chatId];
+
+        let resultText, resultType;
+        if (parseInt(data) === number) {
+            resultText = messages.gameWin(number);
+            resultType = 'win';
         } else {
-            return bot.editMessageText(messages.gameLose(number), {
-                chat_id: chatId,
-                message_id: messageId,
-                reply_markup: againOptions.reply_markup
-            })
+            resultText = messages.gameLose(number);
+            resultType = 'loss';
         }
+
+        updateStats(chatId, resultType);
+
+        return sendScreen(
+            chatId,
+            messageId,
+            resultText,
+            options.againOptions.reply_markup
+        );
     }
-})
+});
 
-console.log('🤖 Бот запущен')
-
-process.on('unhandledRejection', (err) => {
-    console.error('UNHANDLED ERROR:', err)
-})
+console.log('🤖 Бот запущен!');
