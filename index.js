@@ -142,7 +142,11 @@ bot.on('callback_query', async (query) => {
     const messageId = query.message.message_id;
     const data = query.data;
 
-    await bot.answerCallbackQuery(query.id);
+    try {
+        await bot.answerCallbackQuery(query.id);
+    } catch (err) {
+        console.log('Callback expired');
+    }
 
     if (data === 'back') {
         return sendScreen(
