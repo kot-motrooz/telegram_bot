@@ -1,0 +1,14 @@
+{
+  "A123": {
+    "title": "Naruto",
+    "image": "https://upload.wikimedia.org/wikipedia/en/9/94/NarutoCoverTankobon1.jpg"
+  },
+  "456": {
+    "title": "Attack on Titan",
+    "image": "https://upload.wikimedia.org/wikipedia/en/7/7a/Shingeki_no_Kyojin_manga_volume_1.jpg"
+  },
+  "789": {
+    "title": "Demon Slayer",
+    "image": "https://upload.wikimedia.org/wikipedia/en/2/21/Kimetsu_no_Yaiba_volume_1_cover.jpg"
+  }
+}
